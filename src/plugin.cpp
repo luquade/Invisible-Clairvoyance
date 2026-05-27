@@ -35,67 +35,76 @@ public:
     }
 };
 
-void CreateInvisibleClairvoyance()
+// Setup function that modifies the ESL stub spell
+void SetupInvisibleClairvoyance()
 {
-    // 1. Look up the vanilla Clairvoyance spell record (0x21143)
-    auto vanillaClairvoyance = RE::TESForm::LookupByID<RE::SpellItem>(0x21143);
+    // 1. Look up the vanilla Clairvoyance spell by its EditorID
+    auto vanillaClairvoyance = RE::TESForm::LookupByEditorID<RE::SpellItem>("Clairvoyance");
+    // 2. Look up the ESL stub spell we created in the Creation Kit / xEdit
+    auto invisibleClairvoyance = RE::TESForm::LookupByEditorID<RE::SpellItem>("InvisibleClairvoyancePower_STUB");
 
-    if (vanillaClairvoyance) {
-        // 2. Clone the outer spell structure
-        auto duplicatedForm = vanillaClairvoyance->CreateDuplicateForm(true, nullptr);
-        if (!duplicatedForm) return;
+    if (!vanillaClairvoyance || !invisibleClairvoyance) {
+        // One of them doesn't exist – something is wrong with the installation
+        return;
+    }
 
-        auto invisibleClairvoyance = duplicatedForm->As<RE::SpellItem>();
-        if (!invisibleClairvoyance) return;
+    // Mutate the stub into a stealthy Lesser Power
+    invisibleClairvoyance->data.spellType = RE::MagicSystem::SpellType::kLesserPower;
+    invisibleClairvoyance->data.castingType = RE::MagicSystem::CastingType::kFireAndForget;
+    invisibleClairvoyance->data.delivery = RE::MagicSystem::Delivery::kSelf;
 
-        // --- ENGINE-RESERVED FORMID FOR MAXIMUM COLLISION SAFETY ---
-        invisibleClairvoyance->SetFormID(0xDE143800, false);
-        invisibleClairvoyance->SetFormEditorID("InvisibleClairvoyancePower");
-        invisibleClairvoyance->fullName = "Invisible Clairvoyance";
+    invisibleClairvoyance->data.flags.set(RE::SpellItem::SpellFlag::kPCStartSpell);
+    invisibleClairvoyance->data.flags.set(RE::SpellItem::SpellFlag::kInstantCast);
+    invisibleClairvoyance->data.flags.set(RE::SpellItem::SpellFlag::kCostOverride);
+    invisibleClairvoyance->data.costOverride = 0;
 
-        // 3. Mutate ONLY the clone into a stealthy Lesser Power structure
-        invisibleClairvoyance->data.spellType = RE::MagicSystem::SpellType::kLesserPower;
-        invisibleClairvoyance->data.castingType = RE::MagicSystem::CastingType::kFireAndForget;
-        invisibleClairvoyance->data.delivery = RE::MagicSystem::Delivery::kSelf;
+    // Set the display name
+    invisibleClairvoyance->fullName = "Invisible Clairvoyance";
 
-        invisibleClairvoyance->data.flags.set(RE::SpellItem::SpellFlag::kPCStartSpell);
-        invisibleClairvoyance->data.flags.set(RE::SpellItem::SpellFlag::kInstantCast);
-        invisibleClairvoyance->data.flags.set(RE::SpellItem::SpellFlag::kCostOverride);
-        invisibleClairvoyance->data.costOverride = 0;
+    // Clear any existing effects that the stub might have (safety)
+    invisibleClairvoyance->effects.clear();
 
-        for (auto& effect : invisibleClairvoyance->effects) {
-            if (effect && effect->baseEffect) {
-                // --- DEEP RECORD CLONING ---
-                // Native duration is preserved perfectly from the vanilla record copy
-                auto duplicatedEffect = effect->baseEffect->CreateDuplicateForm(true, nullptr);
-                if (duplicatedEffect) {
-                    auto clonedBaseEffect = duplicatedEffect->As<RE::EffectSetting>();
-                    if (clonedBaseEffect) {
-                        effect->baseEffect = clonedBaseEffect;
-                        effect->baseEffect->data.associatedSkill = RE::ActorValue::kIllusion;
+    // Clone each base effect from the original Clairvoyance
+    for (auto& vanillaEffect : vanillaClairvoyance->effects) {
+        if (!vanillaEffect || !vanillaEffect->baseEffect) continue;
 
-                        using EffectFlag = RE::EffectSetting::EffectSettingData::Flag;
-                        effect->baseEffect->data.flags.set(static_cast<EffectFlag>(0x08)); // Horseback casting mask
-                        effect->baseEffect->data.flags.reset(EffectFlag::kHostile);
+        // Create a new Effect structure for our stub
+        RE::Effect* newEffect = new RE::Effect();
+        *newEffect = *vanillaEffect;  // copies magnitude, area, duration, etc.
 
-                        effect->baseEffect->data.castingArt = nullptr;
-                        effect->baseEffect->data.hitEffectArt = nullptr;
-                        effect->baseEffect->data.castingSoundLevel = RE::SOUND_LEVEL::kSilent;
+        // Deep record cloning of the base effect
+        auto duplicatedEffect = vanillaEffect->baseEffect->CreateDuplicateForm(true, nullptr);
+        if (duplicatedEffect) {
+            auto clonedBaseEffect = duplicatedEffect->As<RE::EffectSetting>();
+            if (clonedBaseEffect) {
+                newEffect->baseEffect = clonedBaseEffect;
 
-                        for (auto& soundPair : effect->baseEffect->effectSounds) {
-                            soundPair.sound = nullptr;
-                        }
-                    }
+                // Make the effect silent and non-hostile
+                clonedBaseEffect->data.associatedSkill = RE::ActorValue::kIllusion;
+
+                using EffectFlag = RE::EffectSetting::EffectSettingData::Flag;
+                clonedBaseEffect->data.flags.set(static_cast<EffectFlag>(0x08)); // Horseback casting mask
+                clonedBaseEffect->data.flags.reset(EffectFlag::kHostile);
+
+                clonedBaseEffect->data.castingArt = nullptr;
+                clonedBaseEffect->data.hitEffectArt = nullptr;
+                clonedBaseEffect->data.castingSoundLevel = RE::SOUND_LEVEL::kSilent;
+
+                for (auto& soundPair : clonedBaseEffect->effectSounds) {
+                    soundPair.sound = nullptr;
                 }
             }
         }
+
+        // Add the newly created effect to our stub spell
+        invisibleClairvoyance->effects.push_back(newEffect);
     }
 }
 
 void CheckPlayerSpellbook()
 {
-    auto invisibleClairvoyance = RE::TESForm::LookupByID<RE::SpellItem>(0xDE143800);
-    auto vanillaClairvoyance = RE::TESForm::LookupByID<RE::SpellItem>(0x21143);
+    auto invisibleClairvoyance = RE::TESForm::LookupByEditorID<RE::SpellItem>("InvisibleClairvoyancePower_STUB");
+    auto vanillaClairvoyance = RE::TESForm::LookupByEditorID<RE::SpellItem>("Clairvoyance");
     auto player = RE::PlayerCharacter::GetSingleton();
 
     if (player && vanillaClairvoyance && invisibleClairvoyance) {
@@ -117,7 +126,7 @@ void CheckPlayerSpellbook()
 void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 {
     if (a_msg->type == SKSE::MessagingInterface::kDataLoaded) {
-        CreateInvisibleClairvoyance();
+        SetupInvisibleClairvoyance();
 
         auto ui = RE::UI::GetSingleton();
         if (ui) {
